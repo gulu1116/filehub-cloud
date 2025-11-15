@@ -1,0 +1,94 @@
+# ===========================
+#   C++ & Build Artifacts
+# ===========================
+*.o
+*.obj
+*.so
+*.a
+*.out
+*.exe
+*.dll
+
+# CMake
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+build/
+build-debug/
+build-release/
+
+# ===========================
+#   Logs & Temp
+# ===========================
+*.log
+logs/
+temp/
+tmp/
+*.pid
+
+# Muduo generated files
+*.d
+
+# ===========================
+#   FastDFS
+# ===========================
+# FastDFS data and logs (不要提交这些)
+fastdfs/data/
+fastdfs/logs/
+fastdfs/storage/
+fastdfs/tracker/
+
+# ===========================
+#   Nginx
+# ===========================
+# Nginx auto-generated logs
+nginx/logs/
+nginx/temp/
+*.swp
+*.bak
+
+# ===========================
+#   Redis & MySQL
+# ===========================
+*.rdb
+*.aof
+mysql/
+redis/
+
+# ===========================
+#   Env / Config
+# ===========================
+*.env
+.env.*
+config/*.local
+config/local/
+
+# ===========================
+#   Frontend (Node.js)
+# ===========================
+node_modules/
+dist/
+.cache/
+*.lock
+
+# ===========================
+#   IDE / Editor
+# ===========================
+# VSCode
+.vscode/
+
+# CLion
+.idea/
+cmake-build-*/
+
+# Vim / Emacs
+*.swp
+*.swo
+*~
+
+# ===========================
+#   OS Files
+# ===========================
+.DS_Store
+Thumbs.db
