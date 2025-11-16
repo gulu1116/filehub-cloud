@@ -1,12 +1,17 @@
 #include <iostream>
-// #include "muduo/net"
+#include <signal.h>
+
 
 #include "muduo/net/TcpServer.h"
-#include "muduo/net/TcpConnection.h"
+#include  "muduo/net/TcpConnection.h"
 #include "muduo/net/EventLoop.h"  //EventLoop
 #include "muduo/base/Logging.h" // Logger日志头文件
 #include "http_parser_wrapper.h"
 #include "http_conn.h"
+#include "config_file_reader.h"
+#include "db_pool.h"
+#include "cache_pool.h"
+#include "api_upload.h"
 using namespace muduo;
 using namespace muduo::net;
 using namespace std;
@@ -68,9 +73,53 @@ private:
 };
 
 
-int main()
+int main(int argc, char *argv[])
 {
-    std::cout << "hello GuLu ../../bin/filehub\n";
+
+    std::cout  << argv[0] << "[conf ] "<< std::endl;
+     
+
+     // 默认情况下，往一个读端关闭的管道或socket连接中写数据将引发SIGPIPE信号。我们需要在代码中捕获并处理该信号，
+    // 或者至少忽略它，因为程序接收到SIGPIPE信号的默认行为是结束进程，而我们绝对不希望因为错误的写操作而导致程序退出。
+    // SIG_IGN 忽略信号的处理程序
+    signal(SIGPIPE, SIG_IGN); //忽略SIGPIPE信号
+    int ret = 0;
+    char *str_tc_http_server_conf = NULL;
+    if(argc > 1) {
+        str_tc_http_server_conf = argv[1];  // 指向配置文件路径
+    } else {
+        str_tc_http_server_conf = (char *)"tc_http_server.conf";
+    }
+     std::cout << "conf file path: " <<  str_tc_http_server_conf << std::endl;
+     // 读取配置文件
+    CConfigFileReader config_file(str_tc_http_server_conf);     //读取配置文件
+
+
+
+    char *dfs_path_client = config_file.GetConfigName("dfs_path_client"); // /etc/fdfs/client.conf
+    char *storage_web_server_ip = config_file.GetConfigName("storage_web_server_ip"); //后续可以配置域名
+    char *storage_web_server_port = config_file.GetConfigName("storage_web_server_port");
+
+    
+     // 初始化mysql、redis连接池，内部也会读取读取配置文件tc_http_server.conf
+    CacheManager::SetConfPath(str_tc_http_server_conf); //设置配置文件路径
+    CacheManager *cache_manager = CacheManager::getInstance();
+    if (!cache_manager) {
+        LOG_ERROR <<"CacheManager init failed";
+        return -1;
+    }
+
+    // 将配置文件的参数传递给对应模块
+     ApiUploadInit(dfs_path_client, storage_web_server_ip, storage_web_server_port, "", "");
+
+    CDBManager::SetConfPath(str_tc_http_server_conf);   //设置配置文件路径
+    CDBManager *db_manager = CDBManager::getInstance();
+    if (!db_manager) {
+        LOG_ERROR <<"DBManager init failed";
+        return -1;
+    }
+
+    std::cout << "hello 图床 ../../bin/tc_http_srv2\n";
     uint16_t http_bind_port = 8081;
     const char *http_bind_ip = "0.0.0.0";
     int32_t num_event_loops = 4;
