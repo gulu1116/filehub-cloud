@@ -61,12 +61,62 @@ int decodeRegisterJson(const std::string &str_json, string &user_name,
         email = root["email"].asString();
     }
 
+    return 0;
 }
-
+/*
+* 先根据用户名查询数据库该用户是否存在，不存在才插入
+*/
 int registerUser(string &user_name, string &nick_name, string &pwd,
                  string &phone, string &email) {
-    int ret = 0;
-    // 还没有处理，先直接返回0
+    int ret = 0; //ret = 2 用户已经存在  = 1注册异常  =0注册成功
+    uint32_t user_id = 0;
+    CDBManager *db_manager = CDBManager::getInstance();
+    CDBConn *db_conn = db_manager->GetDBConn("filehub_master");
+    AUTO_REL_DBCONN(db_manager, db_conn);
+    if(!db_conn) {
+        LOG_ERROR << "GetDBConn(filehub_master) failed" ;
+        return 1;
+    }
+    //查询数据库是否存在
+    string str_sql = FormatString("select id from user_info where user_name='%s'", user_name.c_str());
+    CResultSet *result_set = db_conn->ExecuteQuery(str_sql.c_str());
+    if(result_set && result_set->Next()) {
+        LOG_WARN << "id: " << result_set->GetInt("id") << ", user_name: " <<  user_name <<  "  已经存在";
+        delete result_set;
+        ret = 2; //已经存在对应的用户名
+    } else {
+        time_t now;
+        char create_time[TIME_STRING_LEN];
+        //获取当前时间
+        now = time(NULL);
+        strftime(create_time, TIME_STRING_LEN - 1, "%Y-%m-%d %H:%M:%S", localtime(&now)); // unix格式化后的时间
+        str_sql = "insert into user_info "
+                 "(`user_name`,`nick_name`,`password`,`phone`,`email`,`create_"
+                 "time`) values(?,?,?,?,?,?)";
+        LOG_INFO << "执行: " <<  str_sql;
+         // 预处理方式写入数据
+        CPrepareStatement *stmt = new CPrepareStatement();
+        if (stmt->Init(db_conn->GetMysql(), str_sql)) {
+            uint32_t index = 0;
+            string c_time = create_time;
+            stmt->SetParam(index++, user_name);
+            stmt->SetParam(index++, nick_name);
+            stmt->SetParam(index++, pwd);
+            stmt->SetParam(index++, phone);
+            stmt->SetParam(index++, email);
+            stmt->SetParam(index++, c_time);
+            bool bRet = stmt->ExecuteUpdate(); //真正提交要写入的数据
+            if (bRet) {     //提交正常返回 true
+                ret = 0;
+                user_id = db_conn->GetInsertId();   
+                LOG_INFO << "insert user_id: " <<  user_id <<  ", user_name: " <<  user_name ;
+            } else {
+                LOG_ERROR << "insert user_info failed. " <<  str_sql;
+                ret = 1;
+            }
+        }
+        delete stmt;
+    }
 
     return ret;
 }
@@ -81,7 +131,6 @@ int ApiRegisterUser(string &post_data, string &resp_json) {
     string phone;
     string email;
 
-    // json 反序列化
     LOG_INFO << "post_data: " <<  post_data;
 
 

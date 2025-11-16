@@ -3,10 +3,19 @@
 #include <iostream>
 #include "muduo/base/Logging.h" // Logger日志头文件
 #include <json/json.h>
-
+#include <uuid/uuid.h>
 
 using namespace std;
 
+std::string generateUUID() {
+    uuid_t uuid;
+    uuid_generate_time_safe(uuid);  //调用uuid的接口
+ 
+    char uuidStr[40] = {0};
+    uuid_unparse(uuid, uuidStr);     //调用uuid的接口
+ 
+    return std::string(uuidStr);
+}
 
 // / 解析登录信息
 int decodeLoginJson(const std::string &str_json, string &user_name,
@@ -50,16 +59,48 @@ int encodeLoginJson(int code, string &token, string &str_json) {
 
 int verifyUserPassword(string &user_name, string &pwd) {
     int ret = 0;
-    // 这里暂时不做处理，因为这里还没有涉及数据库
+    CDBManager *db_manager = CDBManager::getInstance();
+    CDBConn *db_conn = db_manager->GetDBConn("filehub_slave");
+    AUTO_REL_DBCONN(db_manager, db_conn);   //析构时自动归还连接
+
+    // 根据用户名查询密码
+    string strSql = FormatString("select password from user_info where user_name='%s'", user_name.c_str());
+    CResultSet *result_set = db_conn->ExecuteQuery(strSql.c_str());
+    if (result_set && result_set->Next()) { //如果存在则读取密码
+        // 存在在返回
+        string password = result_set->GetString("password");
+        LOG_INFO << "mysql-pwd: " << password << ", user-pwd: " <<  pwd;
+        if (password == pwd)            //对比密码是否一致
+            ret = 0;                    //对比成功
+        else
+            ret = -1;                   //对比失败
+    } else {                        // 说明用户不存在
+        ret = -1;
+    }
+
+    delete result_set;
 
     return ret;
 }
 
 int setToken(string &user_name, string &token) {
     int ret = 0;
-    token = "1234";
-    //更新到redis
+
+    CacheManager *cache_manager = CacheManager::getInstance();
+    CacheConn *cache_conn = cache_manager->GetCacheConn("token");
+    AUTO_REL_CACHECONN(cache_manager, cache_conn);
+
+    token = generateUUID(); // 生成唯一的token
+
+    if (cache_conn) {
+        //token - 用户名, 86400有效时间为24小时  有效期可以自己修改
+        cache_conn->SetEx(token, 86400, user_name); // redis做超时
+    } else {
+        ret = -1;
+    }
+
     return ret;
+ 
 }
  
 
