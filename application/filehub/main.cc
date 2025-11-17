@@ -119,7 +119,7 @@ int main(int argc, char *argv[])
         return -1;
     }
 
-    std::cout << "hello 图床 ../../bin/tc_http_srv2\n";
+    std::cout << "hello GuLu ../../bin/filehub\n";
     uint16_t http_bind_port = 8081;
     const char *http_bind_ip = "0.0.0.0";
     int32_t num_event_loops = 4;
