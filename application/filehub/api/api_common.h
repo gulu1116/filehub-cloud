@@ -123,4 +123,6 @@ std::string FormatString(const std::string &format, Args... args) {
     std::snprintf(buf.get(), size, format.c_str(), args...);
     return std::string(buf.get(), buf.get() + size - 1); // We don't want the '\0' inside
 }
+
+int DBGetSharePictureCountByUsername(CDBConn *db_conn, string user_name, int &count);
 #endif

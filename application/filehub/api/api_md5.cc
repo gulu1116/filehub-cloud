@@ -8,7 +8,7 @@
     Md5Ok = 0,
     Md5Failed = 1,
     Md5TokenFaild = 4,
-    Md5FileExit = 5,
+    Md5FileExist = 5,
 };
 
 int decodeMd5Json(string &str_json, string &user_name, string &token,
@@ -66,7 +66,7 @@ void handleDealMd5(const char *user, const char *md5, const char *filename,
     char sql_cmd[SQL_MAX_LEN] = {0};
 
     CDBManager *db_manager = CDBManager::getInstance();
-    CDBConn *db_conn = db_manager->GetDBConn("filehub_slave");
+    CDBConn *db_conn = db_manager->GetDBConn("filehub_master");
     AUTO_REL_DBCONN(db_manager, db_conn);
     CacheManager *cache_manager = CacheManager::getInstance();
     CacheConn *cache_conn = cache_manager->GetCacheConn("token");
@@ -92,14 +92,13 @@ void handleDealMd5(const char *user, const char *md5, const char *filename,
         if (ret == 1) //如果有结果，说明此用户已经保存此文件
         {
             LOG_WARN << "user: " << user << "->  filename: " << filename << ", md5: " <<md5 << "已存在";
-            md5_state = Md5FileExit; // 此用户已经有该文件了，不能重复上传
+            md5_state = Md5FileExist; // 此用户已经有该文件了，不能重复上传
             goto END;
         }
 
         // 修改file_info中的count字段，+1 （count
         // 文件引用计数），多了一个用户拥有该文件
-        sprintf(sql_cmd, "update file_info set count = %d where md5 = '%s'",
-                file_ref_count + 1, md5);
+        sprintf(sql_cmd, "update file_info set count = %d where md5 = '%s'", file_ref_count + 1, md5);
         LOG_INFO << "执行: " << sql_cmd;
         if (!db_conn->ExecutePassQuery(sql_cmd)) {
             LOG_ERROR << sql_cmd << " 操作失败";
@@ -125,8 +124,7 @@ void handleDealMd5(const char *user, const char *md5, const char *filename,
         // 用户列表增加一个文件记录
         sprintf(sql_cmd,
                 "insert into user_file_list(user, md5, create_time, file_name, "
-                "shared_status, pv) values ('%s', '%s', '%s', '%s', %d, %d)",
-                user, md5, time_str, filename, 0, 0);
+                "shared_status, pv) values ('%s', '%s', '%s', '%s', %d, %d)", user, md5, time_str, filename, 0, 0);
         LOG_INFO << "执行: " << sql_cmd;
         if (!db_conn->ExecuteCreate(sql_cmd)) {
             LOG_ERROR << sql_cmd << " 操作失败";
@@ -190,8 +188,7 @@ int ApiMd5(string &post_data, string &str_json) {
     //验证登陆token，成功返回0，失败-1
     ret = VerifyToken(user, token); //
     if (ret == 0) {
-        // handleDealMd5(user.c_str(), md5.c_str(), filename.c_str(), str_json); //秒传处理
-        encodeMd5Json(HTTP_RESP_FAIL, str_json);   // 暂时先取消MD5校验
+        handleDealMd5(user.c_str(), md5.c_str(), filename.c_str(), str_json); //秒传处理
         return 0;
     } else {
         LOG_ERROR << "VerifyToken failed";

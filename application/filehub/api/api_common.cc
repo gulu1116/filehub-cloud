@@ -7,8 +7,6 @@ string s_storage_web_server_ip;
 string s_storage_web_server_port;
 string s_shorturl_server_address;
 string s_shorturl_server_access_token;
-
-
  
 
 //验证登陆token，成功返回0，失败-1
@@ -321,3 +319,44 @@ string RandomString(const int len) /*参数为字符串的长度*/
 }
 
 
+//从storage删除指定的文件，参数为文件id
+int RemoveFileFromFastDfs(const char *fileid) {
+    int ret = 0;
+
+    char cmd[1024 * 2] = {0};
+    sprintf(cmd, "fdfs_delete_file %s %s", s_dfs_path_client.c_str(), fileid);
+
+    ret = system(cmd);
+    LOG_INFO << "RemoveFileFromFastDfs ret = " << ret;
+
+    return ret;
+}
+
+
+//获取用户共享图片的数量
+int DBGetSharePictureCountByUsername(CDBConn *db_conn, string user_name, int &count) {
+    count = 0;
+    int ret = 0;
+    // 先查看用户是否存在
+    string str_sql;
+
+    str_sql = FormatString("select count(*) from share_picture_list where user='%s'",
+                     user_name.c_str());
+    LOG_INFO << "执行: " << str_sql;
+    CResultSet *result_set = db_conn->ExecuteQuery(str_sql.c_str());
+    if (result_set && result_set->Next()) {
+        // 存在在返回
+        count = result_set->GetInt("count(*)");
+        LOG_INFO << "count: " << count;
+        ret = 0;
+        delete result_set;
+    } else if (!result_set) { // 操作失败
+        LOG_ERROR << str_sql << " 操作失败";
+        ret = -1;
+    } else {
+        // 没有记录则初始化记录数量为0
+        ret = 0;
+        LOG_INFO << "没有记录: count: " << count;
+    }
+    return ret;
+}
