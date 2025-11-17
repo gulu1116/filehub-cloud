@@ -4,6 +4,8 @@
 #include "api_login.h"
 #include "api_md5.h"
 #include "api_upload.h"
+#include "api_myfiles.h"
+#include "api_sharepicture.h"
 #define HTTP_RESPONSE_JSON_MAX 4096
 #define HTTP_RESPONSE_JSON                                                     \
     "HTTP/1.1 200 OK\r\n"                                                      \
@@ -54,7 +56,11 @@ void CHttpConn::OnRead(Buffer *buf) // CHttpConn业务层面的OnRead
             _HandleMd5Request(url, content);                         // 处理
         } else if (strncmp(url.c_str(), "/api/upload", 11) == 0) {   // 上传
             _HandleUploadRequest(url, content);
-        }  else {
+        }  else if (strncmp(url.c_str(), "/api/myfiles", 12) == 0) {   // 我的文件列表相关的
+            _HandleMyFilesRequest(url, content);
+        }  else if (strncmp(url.c_str(), "/api/sharepic", 13) == 0) {   
+            _HandleSharepictureRequest(url, content);
+        }   else {
             char *resp_content = new char[256];
             string str_json = "{\"code\": 1}"; 
             uint32_t len_json = str_json.size();
@@ -126,3 +132,30 @@ int CHttpConn::_HandleMd5Request(string &url, string &post_data)
 	LOG_INFO << "    uuid: "<< uuid_; 
 	return 0;
 }
+
+int CHttpConn::_HandleMyFilesRequest(string &url, string &post_data) 
+{
+	string str_json;
+	int ret = ApiMyfiles(url, post_data, str_json);
+	char *szContent = new char[HTTP_RESPONSE_JSON_MAX];
+	uint32_t ulen = str_json.length();
+	snprintf(szContent, HTTP_RESPONSE_JSON_MAX, HTTP_RESPONSE_JSON, ulen, str_json.c_str()); 	
+    tcp_conn_->send(szContent);
+    delete [] szContent;
+	LOG_INFO << "    uuid: "<< uuid_; 
+	return 0;
+}
+
+int CHttpConn::_HandleSharepictureRequest(string &url, string &post_data) 
+{
+	string str_json;
+	int ret = ApiSharepicture(url, post_data, str_json);
+	char *szContent = new char[HTTP_RESPONSE_JSON_MAX];
+	uint32_t ulen = str_json.length();
+	snprintf(szContent, HTTP_RESPONSE_JSON_MAX, HTTP_RESPONSE_JSON, ulen, str_json.c_str()); 	
+    tcp_conn_->send(szContent);
+    delete [] szContent;
+	LOG_INFO << "    uuid: "<< uuid_; 
+	return 0;
+}
+ 

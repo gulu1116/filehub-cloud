@@ -20,8 +20,11 @@ private:
     int _HandleLoginRequest(string &url, string &post_data);
 
     int _HandleMd5Request(string &url, string &post_data);
-        int _HandleUploadRequest(string &url, string &post_data);
+    int _HandleUploadRequest(string &url, string &post_data);
 
+    int _HandleMyFilesRequest(string &url, string &post_data);
+
+    int _HandleSharepictureRequest(string &url, string &post_data);
     
     TcpConnectionPtr tcp_conn_;
     uint32_t uuid_ = 0;
