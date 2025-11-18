@@ -8,7 +8,7 @@ int decodeSharePictureJson(string &str_json, string &user_name, string &token,
     Json::Reader jsonReader;
     res = jsonReader.parse(str_json, root);
     if (!res) {
-        LOG_ERROR << "parse reg json failed ";
+        LOG_ERROR << "parse share json failed ";
         return -1;
     }
 
@@ -49,19 +49,19 @@ int encodeSharePictureJson(int ret, string urlmd5, string &str_json) {
 }
 
 //分享图片
-// 1. 这个文件不存在我们就不分享
-// 2.这个文件是否存在不关注， 现在是第二种情况
+// 1. 这个文件不存在就不分享
+// 2. 这个文件是否存在不关注， 现在是第二种情况
 int handleSharePicture(const char *user, const char *filemd5,
                        const char *file_name, string &str_json) 
 {
     // 获取数据库连接
     CDBManager *db_manager = CDBManager::getInstance();
-    CDBConn *db_conn = db_manager->GetDBConn("filehub_slave");
+    CDBConn *db_conn = db_manager->GetDBConn("filehub_master");
     AUTO_REL_DBCONN(db_manager, db_conn);
     int ret = 0;
     string key;
     string urlmd5;
-    urlmd5 = RandomString(32); // 这里我们先简单的，直接使用随机数代替 MD5的使用 可以使用token生成那个函数
+    urlmd5 = RandomString(32); // 这里先直接使用随机数代替 MD5的使用 可以使用token生成那个函数
     char create_time[TIME_STRING_LEN];
     time_t now;
     //获取当前时间
@@ -93,7 +93,7 @@ int decodeBrowsePictureJson(string &str_json, string &urlmd5) {
     Json::Reader jsonReader;
     res = jsonReader.parse(str_json, root);
     if (!res) {
-        LOG_ERROR << "parse reg json failed ";
+        LOG_ERROR << "parse share json failed ";
         return -1;
     }
 
