@@ -6,6 +6,9 @@
 #include "api_upload.h"
 #include "api_myfiles.h"
 #include "api_sharepicture.h"
+#include "api_dealfile.h"
+#include "api_sharefiles.h"
+#include "api_deal_sharefile.h"
 #define HTTP_RESPONSE_JSON_MAX 4096
 #define HTTP_RESPONSE_JSON                                                     \
     "HTTP/1.1 200 OK\r\n"                                                      \
@@ -60,7 +63,13 @@ void CHttpConn::OnRead(Buffer *buf) // CHttpConn业务层面的OnRead
             _HandleMyFilesRequest(url, content);
         }  else if (strncmp(url.c_str(), "/api/sharepic", 13) == 0) {   
             _HandleSharepictureRequest(url, content);
-        }   else {
+        }  else if (strncmp(url.c_str(), "/api/dealfile", 13) == 0) { //
+            _HandleDealfileRequest(url, content);
+        }   else if (strncmp(url.c_str(), "/api/sharefiles", 15) == 0) { //
+            _HandleSharefilesRequest(url, content);
+        } else if (strncmp(url.c_str(), "/api/dealsharefile", 18) == 0) { //
+            _HandleDealsharefileRequest(url, content);
+        }  else {
             char *resp_content = new char[256];
             string str_json = "{\"code\": 1}"; 
             uint32_t len_json = str_json.size();
@@ -159,3 +168,41 @@ int CHttpConn::_HandleSharepictureRequest(string &url, string &post_data)
 	return 0;
 }
  
+  int CHttpConn::_HandleDealfileRequest(string &url, string &post_data) {
+     string str_json;
+    int ret = ApiDealfile(url, post_data, str_json);
+    char *szContent = new char[HTTP_RESPONSE_JSON_MAX];
+    uint32_t ulen = str_json.length();
+    snprintf(szContent, HTTP_RESPONSE_JSON_MAX, HTTP_RESPONSE_JSON, ulen,
+             str_json.c_str());
+    tcp_conn_->send(szContent);
+    delete[] szContent;
+    return 0;
+}
+
+
+int CHttpConn::_HandleSharefilesRequest(string &url, string &post_data) {
+    string str_json;
+    int ret = ApiSharefiles(url, post_data, str_json);
+    char *szContent = new char[HTTP_RESPONSE_JSON_MAX];
+    uint32_t ulen = str_json.length();
+    snprintf(szContent, HTTP_RESPONSE_JSON_MAX, HTTP_RESPONSE_JSON, ulen,
+             str_json.c_str());
+    tcp_conn_->send(szContent);
+    delete[] szContent;
+    return 0;
+}
+
+
+int CHttpConn::_HandleDealsharefileRequest(string &url, string &post_data) {
+    string str_json;
+    int ret = ApiDealsharefile(url, post_data, str_json);
+    char *szContent = new char[HTTP_RESPONSE_JSON_MAX];
+    uint32_t ulen = str_json.length();
+    snprintf(szContent, HTTP_RESPONSE_JSON_MAX, HTTP_RESPONSE_JSON, ulen,
+             str_json.c_str());
+    tcp_conn_->send(szContent);
+    delete[] szContent;
+    return 0;
+
+}

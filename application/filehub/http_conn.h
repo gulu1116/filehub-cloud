@@ -25,7 +25,9 @@ private:
     int _HandleMyFilesRequest(string &url, string &post_data);
 
     int _HandleSharepictureRequest(string &url, string &post_data);
-    
+    int _HandleDealfileRequest(string &url, string &post_data);   
+    int _HandleSharefilesRequest(string &url, string &post_data); 
+    int _HandleDealsharefileRequest(string &url, string &post_data);
     TcpConnectionPtr tcp_conn_;
     uint32_t uuid_ = 0;
      CHttpParserWrapper http_parser_;
