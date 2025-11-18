@@ -125,4 +125,6 @@ std::string FormatString(const std::string &format, Args... args) {
 }
 
 int DBGetSharePictureCountByUsername(CDBConn *db_conn, string user_name, int &count);
+
+int RemoveFileFromFastDfs(const char *fileid);
 #endif

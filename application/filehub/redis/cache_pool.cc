@@ -639,7 +639,7 @@ bool CacheConn::Lrange(string key, long start, long end,
     return true;
 }
 
-int CacheConn::ZsetExit(string key, string member) {
+int CacheConn::ZsetExist(string key, string member) {
     int retn = 0;
     redisReply *reply = NULL;
     if (Init()) {
