@@ -168,7 +168,7 @@ class AutoRelDBCon {
         : manger_(manger), conn_(conn) {}
     ~AutoRelDBCon() {
         if (manger_) {
-            printf("%s RelDBConn:%p\n", __FUNCTION__, conn_);
+            // printf("%s RelDBConn:%p\n", __FUNCTION__, conn_);
             manger_->RelDBConn(conn_);
         }
     } //在析构函数规划

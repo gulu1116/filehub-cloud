@@ -236,7 +236,7 @@ int storeFileinfo(CDBConn *db_conn, CacheConn *cache_conn, char *user,
             "insert into file_info (md5, file_id, url, size, type, count) "
             "values ('%s', '%s', '%s', '%ld', '%s', %d)",
             md5, fileid, fdfs_file_url, size, suffix, 1);
-    // LOG_INFO << "执行: " <<  sql_cmd;
+    LOG_INFO << "执行: " <<  sql_cmd;
     if (!db_conn->ExecuteCreate(sql_cmd)) //执行sql语句
     {
         LOG_ERROR << sql_cmd << " 操作失败";
@@ -465,6 +465,12 @@ int ApiUpload(string &post_data, string &str_json){
         LOG_ERROR << "storeFileinfo failed ";
         ret = -1;
         // 严谨而言，这里需要删除 已经上传的文件
+        //从storage服务器删除此文件，参数为为文件id
+        ret = RemoveFileFromFastDfs(fileid);
+        if (ret != 0) {
+            LOG_ERROR << "RemoveFileFromFastDfs err: " <<  ret;
+        }
+        ret = -1;
         goto END;
     }
     ret = 0;

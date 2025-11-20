@@ -4,6 +4,8 @@
 
 #include "muduo/net/TcpServer.h"
 #include  "muduo/net/TcpConnection.h"
+#include "muduo/base/ThreadPool.h"
+
 #include "muduo/net/EventLoop.h"  //EventLoop
 #include "muduo/base/Logging.h" // Logger日志头文件
 #include "http_parser_wrapper.h"
@@ -22,8 +24,11 @@ class HttpServer
 {
 public:
     //构造函数 loop主线程的EventLoop， addr封装ip，port, name服务名字，num_event_loops多少个subReactor
-    HttpServer(EventLoop *loop, const InetAddress &addr, const std::string &name,  int num_event_loops)
-    :loop_(loop), server_(loop, addr,name)
+    HttpServer(EventLoop *loop, const InetAddress &addr, const std::string &name,  int num_event_loops
+                ,int num_threads)
+    :loop_(loop)
+    , server_(loop, addr,name)
+    , num_threads_(num_threads)
     {
         server_.setConnectionCallback(std::bind(&HttpServer::onConnection, this, std::placeholders::_1));
         server_.setMessageCallback(
@@ -33,6 +38,8 @@ public:
         server_.setThreadNum(num_event_loops);
     }
     void start() {
+        if(num_threads_ != 0)
+            thread_pool_.start(num_threads_);
         server_.start();
     }
 private:
@@ -43,10 +50,14 @@ private:
             uint32_t uuid = conn_uuid_generator_++;
             conn->setContext(uuid);
             CHttpConnPtr http_conn = std::make_shared<CHttpConn>(conn);
-            s_http_map.insert({uuid, http_conn});
+         
+            std::lock_guard<std::mutex> ulock(mtx_); //自动释放
+            s_http_map.insert({ uuid, http_conn});
+         
         } else {
             LOG_INFO <<  "onConnection  dis conn" << conn.get();
             uint32_t uuid = std::any_cast<uint32_t>(conn->getContext());
+            std::lock_guard<std::mutex> ulock(mtx_); //自动释放
             s_http_map.erase(uuid);
         }
     }
@@ -54,11 +65,15 @@ private:
     void onMessage(const TcpConnectionPtr &conn, Buffer *buf, Timestamp time) {
         LOG_INFO <<  "onMessage " << conn.get();
         uint32_t uuid = std::any_cast<uint32_t>(conn->getContext());
+        mtx_.lock();  
         CHttpConnPtr &http_conn = s_http_map[uuid];
+        mtx_.unlock();
          //处理 相关业务
-        http_conn->OnRead(buf);  // 直接在io线程处理
-        // LOG_INFO << "get msg: " << in_buf;
-          // conn->send(in_buf, buf->readableBytes());
+        if(num_threads_ != 0)  //开启了线程池
+            thread_pool_.run(std::bind(&CHttpConn::OnRead, http_conn, buf)); //给到业务线程处理
+        else {  //没有开启线程池
+            http_conn->OnRead(buf);  // 直接在io线程处理
+        }   
        
     }
 
@@ -70,6 +85,11 @@ private:
     TcpServer server_;    // 每个连接的回调数据 新的连接/断开连接  收到数据  发送数据完成   
     EventLoop *loop_ = nullptr; //这个是主线程的EventLoop
     std::atomic<uint32_t> conn_uuid_generator_ = 0;  //这里是用于http请求，不会一直保持链接
+    std::mutex mtx_;
+
+    //线程池
+    ThreadPool thread_pool_;
+    const int num_threads_ = 0;
 };
 
 
@@ -94,6 +114,11 @@ int main(int argc, char *argv[])
      // 读取配置文件
     CConfigFileReader config_file(str_tc_http_server_conf);     //读取配置文件
 
+    // Logger::setLogLevel(Logger::ERROR);     //性能测试时减少打印
+    //日志设置级别
+    char *str_log_level =  config_file.GetConfigName("log_level");  
+    Logger::LogLevel log_level = static_cast<Logger::LogLevel>(atoi(str_log_level));
+    Logger::setLogLevel(log_level);
 
 
     char *dfs_path_client = config_file.GetConfigName("dfs_path_client"); // /etc/fdfs/client.conf
@@ -119,16 +144,23 @@ int main(int argc, char *argv[])
         return -1;
     }
 
-    std::cout << "hello GuLu ../../bin/filehub\n";
+    std::cout << "hello 图床 ../../bin/tc_http_srv2\n";
     uint16_t http_bind_port = 8081;
     const char *http_bind_ip = "0.0.0.0";
-    int32_t num_event_loops = 4;
+    char *str_num_event_loops = config_file.GetConfigName("num_event_loops");  
+    int num_event_loops = atoi(str_num_event_loops);
+    char *str_num_threads = config_file.GetConfigName("num_threads");  
+    int num_threads = atoi(str_num_threads);
+
+    char *str_timeout_ms = config_file.GetConfigName("timeout_ms");  
+    int timeout_ms = atoi(str_timeout_ms);
+    std::cout << "timeout_ms: " << timeout_ms << std::endl;
 
     EventLoop loop;     //主循环
     InetAddress addr(http_bind_ip, http_bind_port);     // 注意别搞错位置了
     LOG_INFO << "port: " << http_bind_port;
-    HttpServer server(&loop, addr, "HttpServer", num_event_loops);
+    HttpServer server(&loop, addr, "HttpServer", num_event_loops, num_threads);
     server.start();
-    loop.loop();
+    loop.loop(timeout_ms); //1000ms
     return 0;
 }
