@@ -1,4 +1,8 @@
 #include "http_conn.h"
+#include <fstream>
+#include <sstream>
+#include <string.h>
+
 #include "muduo/base/Logging.h" // Logger日志头文件
 #include "api_register.h"
 #include "api_login.h"
@@ -16,6 +20,7 @@
     "Content-Length:%d\r\n"                                                    \
     "Content-Type:application/json;charset=utf-8\r\n\r\n%s"
 
+#define HTTP_RESPONSE_HTM_MAX 4096
 #define HTTP_RESPONSE_HTML                                                    \
     "HTTP/1.1 200 OK\r\n"                                                      \
     "Connection:close\r\n"                                                     \
@@ -45,6 +50,11 @@ void CHttpConn::OnRead(Buffer *buf) // CHttpConn业务层面的OnRead
 {
     const char *in_buf = buf->peek();
     int32_t len = buf->readableBytes();
+    #if 0
+    string content;
+    string url;
+    _HandleMemHtml(url, content);
+#else 
     http_parser_.ParseHttpContent(in_buf, len);
     if(http_parser_.IsReadAll()) {
         string url = http_parser_.GetUrlString();
@@ -69,7 +79,11 @@ void CHttpConn::OnRead(Buffer *buf) // CHttpConn业务层面的OnRead
             _HandleSharefilesRequest(url, content);
         } else if (strncmp(url.c_str(), "/api/dealsharefile", 18) == 0) { //
             _HandleDealsharefileRequest(url, content);
-        }  else {
+        } else if (strncmp(url.c_str(), "/api/html", 9) == 0) {   //  测试网页
+            _HandleHtml(url, content);
+        } else if (strncmp(url.c_str(), "/api/memhtml", 12) == 0) {   //  测试网页
+            _HandleMemHtml(url, content);
+        }else {
             char *resp_content = new char[256];
             string str_json = "{\"code\": 1}"; 
             uint32_t len_json = str_json.size();
@@ -82,7 +96,9 @@ void CHttpConn::OnRead(Buffer *buf) // CHttpConn业务层面的OnRead
             snprintf(resp_content, 256, HTTP_RESPONSE_REQ, len_json, str_json.c_str()); 	
             tcp_conn_->send(resp_content);
         }
+       
     }
+     #endif
 }
 
 
@@ -205,4 +221,58 @@ int CHttpConn::_HandleDealsharefileRequest(string &url, string &post_data) {
     delete[] szContent;
     return 0;
 
+}
+
+int CHttpConn::_HandleHtml(string &url, string &post_data) {
+    std::ifstream fileStream("index.html");
+    if (!fileStream.is_open()) {
+        std::cerr << "无法打开文件。" << std::endl;
+    }
+    std::stringstream buffer;
+    buffer << fileStream.rdbuf();
+
+    char *szContent = new char[HTTP_RESPONSE_JSON_MAX];
+    uint32_t ulen = buffer.str().size();
+    snprintf(szContent, HTTP_RESPONSE_JSON_MAX, HTTP_RESPONSE_HTML, ulen,
+             buffer.str().c_str());
+
+    tcp_conn_->send(szContent);
+    delete[] szContent;
+    return 0;
+}
+
+char htmlStr[] = "<!DOCTYPE html>\n"
+                     "<html>\n"
+                     "<head>\n"
+                     "<title>Welcome to nginx!</title>\n"
+                     "<style>\n"
+                     "    body {\n"
+                     "        width: 35em;\n"
+                     "        margin: 0 auto;\n"
+                     "        font-family: Tahoma, Verdana, Arial, sans-serif;\n"
+                     "    }\n"
+                     "</style>\n"
+                     "</head>\n"
+                     "<body>\n"
+                     "<h1>Welcome to nginx!</h1>\n"
+                     "<p>If you see this page, GuLu's nginx web server is successfully installed and\n"
+                     "working. Further configuration is required.</p>\n"
+                     "<p>For online documentation and support please refer to\n"
+                     "<a href=\"http://nginx.org/\">nginx.org</a>.<br/>\n"
+                     "Commercial support is available at\n"
+                     "<a href=\"http://nginx.com/\">nginx.com</a>.</p>\n"
+                     "<p><em>Thank you for using nginx.</em></p>\n"
+                     "</body>\n"
+                     "</html>";
+
+int CHttpConn::_HandleMemHtml(string &url, string &post_data) {
+    
+    char *szContent = new char[HTTP_RESPONSE_HTM_MAX];
+  
+    snprintf(szContent, HTTP_RESPONSE_HTM_MAX, HTTP_RESPONSE_HTML, strlen(htmlStr),
+             htmlStr);
+
+    tcp_conn_->send(szContent);
+    delete[] szContent;
+    return 0;
 }

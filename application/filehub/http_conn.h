@@ -28,6 +28,9 @@ private:
     int _HandleDealfileRequest(string &url, string &post_data);   
     int _HandleSharefilesRequest(string &url, string &post_data); 
     int _HandleDealsharefileRequest(string &url, string &post_data);
+
+    int _HandleHtml(string &url, string &post_data);
+    int _HandleMemHtml(string &url, string &post_data);
     TcpConnectionPtr tcp_conn_;
     uint32_t uuid_ = 0;
      CHttpParserWrapper http_parser_;
