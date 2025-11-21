@@ -127,4 +127,120 @@ std::string FormatString(const std::string &format, Args... args) {
 int DBGetSharePictureCountByUsername(CDBConn *db_conn, string user_name, int &count);
 
 int RemoveFileFromFastDfs(const char *fileid);
+
+
+#include <iostream>
+#include <mutex>
+#include <condition_variable>
+#include <chrono>
+#include <atomic>
+#include <memory>
+
+class FileInfoLock {
+ public:
+  // 获取单例实例的静态方法
+  static FileInfoLock& GetInstance() {
+    static FileInfoLock instance;  // 线程安全的单例（C++11及以上）
+    return instance;
+  }
+
+  // 尝试获取锁，支持超时退出
+  bool TryLockFor(int milliseconds) {
+    std::unique_lock<std::mutex> lock(mtx_);
+    if (!cv_.wait_for(lock, std::chrono::milliseconds(milliseconds),
+                      [this]() { return !locked_ || stop_; })) {
+      return false;  // 超时退出
+    }
+    if (stop_) {
+      return false;  // 主动退出
+    }
+    locked_ = true;
+    return true;
+  }
+
+  // 释放锁
+  void Unlock() {
+    std::unique_lock<std::mutex> lock(mtx_);
+    locked_ = false;
+    cv_.notify_one();
+  }
+
+  // 主动退出，通知所有等待的线程
+  void StopWaiting() {
+    std::unique_lock<std::mutex> lock(mtx_);
+    stop_ = true;
+    cv_.notify_all();  // 通知所有等待的线程
+  }
+
+  // 重置状态，允许重新使用
+  void Reset() {
+    std::unique_lock<std::mutex> lock(mtx_);
+    stop_ = false;
+    locked_ = false;
+  }
+
+ private:
+  // 私有化构造函数和拷贝构造函数
+  FileInfoLock() : locked_(false), stop_(false) {}
+  FileInfoLock(const FileInfoLock&) = delete;             // 禁止拷贝构造
+  FileInfoLock& operator=(const FileInfoLock&) = delete;  // 禁止赋值操作
+
+  std::mutex mtx_;
+  std::condition_variable cv_;
+  bool locked_;
+  std::atomic<bool> stop_;  // 用于主动退出的标志位
+};
+
+// RAII 包装类，用于自动管理锁的生命周期
+class ScopedFileInfoLock {
+ public:
+  // 构造函数：尝试获取锁
+  ScopedFileInfoLock(FileInfoLock& file_info_lock, int timeout_ms)
+      : file_info_lock_(file_info_lock), is_locked_(false) {
+    is_locked_ = file_info_lock_.TryLockFor(timeout_ms);
+    if (is_locked_) {
+      std::cout << "Lock acquired successfully!" << std::endl;
+    } else {
+      std::cout << "Failed to acquire lock within the timeout period!" << std::endl;
+    }
+  }
+
+  // 析构函数：自动释放锁
+  ~ScopedFileInfoLock() {
+    if (is_locked_) {
+      file_info_lock_.Unlock();
+      std::cout << "Lock released automatically!" << std::endl;
+    }
+  }
+
+  // 检查是否成功获取锁
+  bool IsLocked() const {
+    return is_locked_;
+  }
+
+ private:
+  FileInfoLock& file_info_lock_;
+  bool is_locked_;
+};
+
+//测试范例
+#if 0
+int main() {
+  FileInfoLock& file_lock = FileInfoLock::GetInstance();
+
+  {
+    // 使用 ScopedFileInfoLock 自动管理锁
+    ScopedFileInfoLock lock(file_lock, 1000);  // 超时时间为 1000 毫秒
+    if (lock.IsLocked()) {
+      // 模拟一些操作
+      std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    } else {
+      std::cout << "Cannot proceed without lock!" << std::endl;
+    }
+  }  // 锁在此处自动释放
+
+  return 0;
+}
+
+#endif
 #endif
