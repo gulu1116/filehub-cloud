@@ -49,19 +49,19 @@ int encodeSharePictureJson(int ret, string urlmd5, string &str_json) {
 }
 
 //分享图片
-// 1. 这个文件不存在就不分享
-// 2. 这个文件是否存在不关注， 现在是第二种情况
+// 1. 这个文件不存在我们就不分享
+// 2.这个文件是否存在不关注， 现在是第二种情况
 int handleSharePicture(const char *user, const char *filemd5,
                        const char *file_name, string &str_json) 
 {
     // 获取数据库连接
     CDBManager *db_manager = CDBManager::getInstance();
-    CDBConn *db_conn = db_manager->GetDBConn("filehub_master");
+    CDBConn *db_conn = db_manager->GetDBConn("filehub_slave");
     AUTO_REL_DBCONN(db_manager, db_conn);
     int ret = 0;
     string key;
     string urlmd5;
-    urlmd5 = RandomString(32); // 这里先直接使用随机数代替 MD5的使用 可以使用token生成那个函数
+    urlmd5 = RandomString(32); // 这里先简单的直接使用随机数代替 MD5的使用 可以使用token生成那个函数
     char create_time[TIME_STRING_LEN];
     time_t now;
     //获取当前时间
@@ -78,8 +78,7 @@ int handleSharePicture(const char *user, const char *filemd5,
         ret = 0;
     }
 
-    // file_info count 增加的问题
-    if (ret == 0) {
+     if (ret == 0) {
         encodeSharePictureJson(HTTP_RESP_OK, urlmd5, str_json);
     } else {
         encodeSharePictureJson(HTTP_RESP_FAIL, urlmd5, str_json);
@@ -93,7 +92,7 @@ int decodeBrowsePictureJson(string &str_json, string &urlmd5) {
     Json::Reader jsonReader;
     res = jsonReader.parse(str_json, root);
     if (!res) {
-        LOG_ERROR << "parse share json failed ";
+        LOG_ERROR << "parse browse json failed ";
         return -1;
     }
 
@@ -169,7 +168,7 @@ int handleBrowsePicture(const char *urlmd5, string &str_json) {
     }
     //更新访问计数 pv
     pv += 1;
-    sql_cmd = FormatString( "update share_picture_list set pv = %d where urlmd5 = '%s'", pv, urlmd5);
+    sql_cmd = FormatString( "update share_picture_list set pv = pv+1 where urlmd5 = '%s'", urlmd5);
     LOG_INFO << "执行: " <<  sql_cmd;
     if (!db_conn->ExecuteUpdate(sql_cmd.c_str())) {
         LOG_ERROR << sql_cmd << " 操作失败";
@@ -197,7 +196,7 @@ int decodePictureListJson(string &str_json, string &user_name, string &token,
     Json::Reader jsonReader;
     res = jsonReader.parse(str_json, root);
     if (!res) {
-        LOG_ERROR << "parse reg json failed ";
+        LOG_ERROR << "parse normal json failed ";
         return -1;
     }
 
@@ -309,6 +308,67 @@ END:
 
 }
 
+
+int decodeCancelPictureJson(string &str_json, string &user_name,
+                            string &urlmd5) {
+    bool res;
+    Json::Value root;
+    Json::Reader jsonReader;
+    res = jsonReader.parse(str_json, root);
+    if (!res) {
+        LOG_ERROR << "parse cancel json failed ";
+        return -1;
+    }
+
+    if (root["user"].isNull()) {
+        LOG_ERROR << "user null";
+        return -1;
+    }
+    user_name = root["user"].asString();
+
+    if (root["urlmd5"].isNull()) {
+        LOG_ERROR << "urlmd5 null";
+        return -1;
+    }
+    urlmd5 = root["urlmd5"].asString();
+
+    return 0;
+}
+
+int encodeCancelPictureJson(int ret, string &str_json) {
+    Json::Value root;
+    root["code"] = ret;
+    Json::FastWriter writer;
+    str_json = writer.write(root);
+    return 0;
+}
+
+
+//取消分享文件
+void handleCancelSharePicture(const char *user, const char *urlmd5,
+                              string &str_json) {
+    int ret = 0;
+    char sql_cmd[SQL_MAX_LEN] = {0};
+ 
+    CDBManager *db_manager = CDBManager::getInstance();
+    CDBConn *db_conn = db_manager->GetDBConn("filehub_master");
+    AUTO_REL_DBCONN(db_manager, db_conn);
+ 
+
+    //删除在共享图片列表的数据
+    sprintf(sql_cmd,
+        "delete from share_picture_list where user = '%s' and urlmd5 = '%s'",
+        user, urlmd5);
+    LOG_INFO << "执行: " <<  sql_cmd;
+    if (!db_conn->ExecutePassQuery(sql_cmd)) {
+        LOG_ERROR << sql_cmd << " 操作失败";
+        encodeCancelPictureJson(HTTP_RESP_FAIL, str_json);
+    } else {
+        encodeCancelPictureJson(HTTP_RESP_OK, str_json);
+    }            
+}
+
+
 int ApiSharepicture(string &url, string &post_data, string &str_json){
     char cmd[20];
     string user_name; //用户名
@@ -350,6 +410,16 @@ int ApiSharepicture(string &url, string &post_data, string &str_json){
         } else {
             // 回复请求格式错误
             encodeSharePictureJson(HTTP_RESP_FAIL, urlmd5, str_json);
+        }
+    }else if (strcmp(cmd, "cancel") == 0) //取消分享文件
+    {
+        //理论上需要token
+        ret = decodeCancelPictureJson(post_data, user_name, urlmd5);
+        if (ret == 0) {
+            handleCancelSharePicture(user_name.c_str(), urlmd5.c_str(), str_json);
+        } else {
+            // 回复请求格式错误
+            encodeCancelPictureJson(1, str_json);
         }
     }
     else {

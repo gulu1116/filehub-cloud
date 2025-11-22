@@ -172,6 +172,7 @@ int getFullUrlByFileid(char *fileid, char *fdfs_file_url) {
         // 从工具输出中提取存储节点IP（核心）
         // strstr(const char *haystack, const char *needle)：在haystack中查找needle的首次出现
         // 这里查找标记字符串"source ip address: "，p指向该字符串的起始位置
+        // 拼接上传文件的完整url地址--->http://host_name/group1/M00/00/00/D12313123232312.png
         p = strstr(fdfs_file_stat_buf, "source ip address: ");
 
         q = p + strlen("source ip address: ");
@@ -191,7 +192,6 @@ int getFullUrlByFileid(char *fileid, char *fdfs_file_url) {
         strcat(fdfs_file_url, fileid);
 
         LOG_INFO << "fdfs_file_url:" <<  fdfs_file_url;
-        // 拼接上传文件的完整url地址--->http://host_name/group1/M00/00/00/D12313123232312.png
     }
 
 END:
@@ -212,12 +212,13 @@ END:
 // 返回值：0成功（双表插入均成功），-1失败（任一表插入失败）
 int storeFileinfo(CDBConn *db_conn, CacheConn *cache_conn, char *user,
                   char *filename, char *md5, long size, char *fileid,
-                  const char *fdfs_file_url) {
+                  const char *fdfs_file_url, bool &file_exsit)  {
     int ret = 0;
     time_t now;
     char create_time[TIME_STRING_LEN];
     char suffix[SUFFIX_LEN];
     char sql_cmd[SQL_MAX_LEN] = {0};
+    file_exsit = false;
 
     //得到文件后缀字符串 如果非法文件后缀,返回"null"
     GetFileSuffix(filename, suffix); // mp4, jpg, png
@@ -232,18 +233,32 @@ int storeFileinfo(CDBConn *db_conn, CacheConn *cache_conn, char *user,
        -- type 文件类型： png, zip, mp4……
        -- count 文件引用计数， 默认为1， 每增加一个用户拥有此文件，此计数器+1
        */
-    sprintf(sql_cmd,
+    ScopedFileInfoLock lock(FileInfoLock::GetInstance(), 1000);
+    if (lock.IsLocked())   {
+        sprintf(sql_cmd,
             "insert into file_info (md5, file_id, url, size, type, count) "
             "values ('%s', '%s', '%s', '%ld', '%s', %d)",
             md5, fileid, fdfs_file_url, size, suffix, 1);
-    LOG_INFO << "执行: " <<  sql_cmd;
-    if (!db_conn->ExecuteCreate(sql_cmd)) //执行sql语句
-    {
-        LOG_ERROR << sql_cmd << " 操作失败";
+        LOG_INFO << "执行: " <<  sql_cmd;
+        if (!db_conn->ExecuteCreate(sql_cmd)) //执行sql语句
+        {
+            LOG_ERROR << sql_cmd << " 操作失败， try  update file_info";
+            // 此时需要查询 file_info 是否已经存在对应md5的记录了，如果已经存在 可以直接增加引用计数
+            sprintf(sql_cmd, "update file_info set count = count +1 where md5 = '%s'",  md5);
+            LOG_INFO << "执行: " << sql_cmd;
+            if (!db_conn->ExecutePassQuery(sql_cmd)) {
+                LOG_ERROR << sql_cmd << " 操作失败, 可能数据库已经异常了";
+                ret = -1;
+                goto END;
+            }
+            file_exsit = true;      //同样的文件已经存在了
+        }
+    } else {
+        LOG_ERROR << "FileInfoLock TryLockFor" << "超时";
         ret = -1;
         goto END;
     }
-
+    
     //获取当前时间
     now = time(NULL);
     strftime(create_time, TIME_STRING_LEN - 1, "%Y-%m-%d %H:%M:%S", localtime(&now));
@@ -262,14 +277,14 @@ int storeFileinfo(CDBConn *db_conn, CacheConn *cache_conn, char *user,
             "insert into user_file_list(user, md5, create_time, file_name, "
             "shared_status, pv) values ('%s', '%s', '%s', '%s', %d, %d)",
             user, md5, create_time, filename, 0, 0);
-    // LOG_INFO << "执行: " <<  sql_cmd;
+    LOG_INFO << "执行: " <<  sql_cmd;
     if (!db_conn->ExecuteCreate(sql_cmd)) {
         LOG_ERROR << sql_cmd << " 操作失败";
         ret = -1;
         goto END;
     }
 
-    // // 询用户文件数量+1      web热点 大明星  微博存在缓存里面。
+    // 询用户文件数量+1      web热点 大明星  微博存在缓存里面。
     // if (CacheIncrCount(cache_conn, string(user)) < 0) {
     //     LOG_ERROR << " CacheIncrCount 操作失败";
     // }
@@ -281,30 +296,31 @@ END:
 int ApiUpload(string &post_data, string &str_json){
 
     LOG_INFO << "post_data:\n" << post_data;
-    char suffix[SUFFIX_LEN] = {0};               // 后缀
-    char fileid[TEMP_BUF_MAX_LEN] = {0};         // 文件上传到fastDFS后的文件id
-    char fdfs_file_url[FILE_URL_LEN] = {0};      // 文件所存放storage的host_name
+    char suffix[SUFFIX_LEN] = {0};          //后缀
+    char fileid[TEMP_BUF_MAX_LEN] = {0};    //文件上传到fastDFS后的文件id
+    char fdfs_file_url[FILE_URL_LEN] = {0}; //文件所存放storage的host_name
     int ret = 0;
-    char boundary[TEMP_BUF_MAX_LEN] = {0};       // 分界线信息 分隔符
-    char file_name[128] = {0};                   // 文件名
-    char file_content_type[128] = {0};           // 文件类型
-    char file_path[128] = {0};                   // 文件路径
-    char new_file_path[128] = {0};               // 新文件路径
-    char file_md5[128] = {0};                    // 文件的md5
-    char file_size[32] = {0};                    // 文件的大小
-    long long_file_size = 0;                     // 转成long类型的文件大小
-    char user[32] = {0};                         // 用户名
+    char boundary[TEMP_BUF_MAX_LEN] = {0};  //分界线信息 分隔符
+    char file_name[128] = {0};              //文件名
+    char file_content_type[128] = {0};      //文件类型
+    char file_path[128] = {0};              //文件路径
+    char new_file_path[128] = {0};          //新文件路径
+    char file_md5[128] = {0};               // 文件的md5
+    char file_size[32] = {0};               //文件的大小
+    long long_file_size = 0;                //转成long类型的文件大小
+    char user[32] = {0};                    //用户名
 
     char *begin = (char *)post_data.c_str();
-    char *p1, *p2;                               // 临时的界限位置
+    char *p1, *p2;                          //临时的界限位置
+    bool file_exsit = false;
 
-     Json::Value value;
+    Json::Value value;
 
      // 获取数据库连接
     CDBManager *db_manager = CDBManager::getInstance();
     CDBConn *db_conn = db_manager->GetDBConn("filehub_master"); // 连接池可以配置多个 分库
     AUTO_REL_DBCONN(db_manager, db_conn);
-
+    goto END;//不做任何解析，直接返回
     //分隔符
     // 1. 解析boundary
     // Content-Type: multipart/form-data;
@@ -459,17 +475,18 @@ int ApiUpload(string &post_data, string &str_json){
   
     //===============> 将该文件的FastDFS相关信息存入mysql中 <======
     LOG_INFO << "storeFileinfo, origin url: " << fdfs_file_url ;// << " -> short url: " <<  short_url;
+    
     // 把文件写入file_info
-    if (storeFileinfo(db_conn, NULL, user, file_name, file_md5,
-                      long_file_size, fileid, fdfs_file_url) < 0) {
-        LOG_ERROR << "storeFileinfo failed ";
-        ret = -1;
+    ret = storeFileinfo(db_conn, NULL, user, file_name, file_md5, long_file_size, fileid, fdfs_file_url, file_exsit);
+    if(ret < 0 || file_exsit) {
         // 严谨而言，这里需要删除 已经上传的文件
-        //从storage服务器删除此文件，参数为为文件id
-        ret = RemoveFileFromFastDfs(fileid);
-        if (ret != 0) {
-            LOG_ERROR << "RemoveFileFromFastDfs err: " <<  ret;
+         //从storage服务器删除此文件，参数为为文件id
+        if (RemoveFileFromFastDfs(fileid) != 0) {
+            LOG_ERROR << "RemoveFileFromFastDfs failed";
         }
+    }
+    if (ret < 0) {
+        LOG_ERROR << "storeFileinfo failed ";
         ret = -1;
         goto END;
     }

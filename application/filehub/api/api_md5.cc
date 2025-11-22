@@ -72,86 +72,91 @@ void handleDealMd5(const char *user, const char *md5, const char *filename,
     CacheConn *cache_conn = cache_manager->GetCacheConn("token");
     AUTO_REL_CACHECONN(cache_manager, cache_conn);
 
-    // sql 语句，获取此md5值文件的文件计数器 count
-    sprintf(sql_cmd, "select count from file_info where md5 = '%s'", md5);
+
+    //查看此用户是否已经有此文件，如果存在说明此文件已上传，无需再上传
+    sprintf(sql_cmd,
+            "select * from user_file_list where user = '%s' and md5 = '%s' "
+            "and file_name = '%s'",
+            user, md5, filename);
     LOG_INFO << "执行: " << sql_cmd;
-    //返回值： 0成功并保存记录集，1没有记录集，2有记录集但是没有保存，-1失败
-    file_ref_count = 0;
-    ret = GetResultOneCount(db_conn, sql_cmd, file_ref_count); //执行sql语句
-    LOG_INFO << "ret: " << ret << ", file_ref_count: " <<  file_ref_count;
-    if (ret == 0) //有结果, 并且返回 file_info被引用的计数 file_ref_count
+    //返回值： 1: 表示已经存储了，有这个文件记录
+    ret = CheckwhetherHaveRecord(db_conn, sql_cmd); // 检测个人是否有记录
+    if (ret == 1) //如果有结果，说明此用户已经保存此文件
     {
-        //查看此用户是否已经有此文件，如果存在说明此文件已上传，无需再上传
-        sprintf(sql_cmd,
-                "select * from user_file_list where user = '%s' and md5 = '%s' "
-                "and file_name = '%s'",
-                user, md5, filename);
-        LOG_INFO << "执行: " << sql_cmd;
-        //返回值： 1: 表示已经存储了，有这个文件记录
-        ret = CheckwhetherHaveRecord(db_conn, sql_cmd); // 检测个人是否有记录
-        if (ret == 1) //如果有结果，说明此用户已经保存此文件
-        {
-            LOG_WARN << "user: " << user << "->  filename: " << filename << ", md5: " <<md5 << "已存在";
-            md5_state = Md5FileExist; // 此用户已经有该文件了，不能重复上传
-            goto END;
-        }
+        LOG_WARN << "user: " << user << "->  filename: " << filename << ", md5: " <<md5 << "已存在";
+        md5_state = Md5FileExist; // 此用户已经有该文件了，不能重复上传
+        goto END;
+    }
 
-        // 修改file_info中的count字段，+1 （count
-        // 文件引用计数），多了一个用户拥有该文件
-        sprintf(sql_cmd, "update file_info set count = %d where md5 = '%s'", file_ref_count + 1, md5);
-        LOG_INFO << "执行: " << sql_cmd;
-        if (!db_conn->ExecutePassQuery(sql_cmd)) {
-            LOG_ERROR << sql_cmd << " 操作失败";
-            md5_state =
-                Md5Failed; // 更新文件引用计数失败这里也认为秒传失败，宁愿他再次上传文件
-            goto END;
-        }
 
-        // 2、user_file_list, 用户文件列表插入一条数据
-        //当前时间戳
-        struct timeval tv;
-        struct tm *ptm;
-        char time_str[128];
 
-        //使用函数gettimeofday()函数来得到时间。它的精度可以达到微妙
-        gettimeofday(&tv, NULL);
-        ptm = localtime(
-            &tv.tv_sec); //把从1970-1-1零点零分到当前时间系统所偏移的秒数时间转换为本地时间
-        // strftime()
-        // 函数根据区域设置格式化本地时间/日期，函数的功能将时间格式化，或者说格式化一个时间字符串
-        strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", ptm);
-
-        // 用户列表增加一个文件记录
-        sprintf(sql_cmd,
-                "insert into user_file_list(user, md5, create_time, file_name, "
-                "shared_status, pv) values ('%s', '%s', '%s', '%s', %d, %d)", user, md5, time_str, filename, 0, 0);
-        LOG_INFO << "执行: " << sql_cmd;
-        if (!db_conn->ExecuteCreate(sql_cmd)) {
-            LOG_ERROR << sql_cmd << " 操作失败";
+      
+    {
+        ScopedFileInfoLock lock(FileInfoLock::GetInstance(), 1000);
+        if (lock.IsLocked()) {
+            // 修改file_info中的count字段，+1 （count  文件引用计数），多了一个用户拥有该文件
+            sprintf(sql_cmd, "update file_info set count = count +1 where md5 = '%s'",  md5);
+            LOG_INFO << "执行: " << sql_cmd;
+            if (!db_conn->ExecutePassQuery(sql_cmd)) {
+                LOG_ERROR << sql_cmd << " 操作失败";
+                md5_state = Md5Failed; // 更新文件引用计数失败这里也认为秒传失败，宁愿他再次上传文件：1.该文件确实不存在; 2.数据库异常
+                goto END;
+            } else {
+                LOG_INFO << "秒传失败";
+                md5_state = Md5Failed;
+                goto END;
+            }
+        } else {
             md5_state = Md5Failed;
-            // 恢复引用计数
-            sprintf(sql_cmd, "update file_info set count = %d where md5 = '%s'",
-                    file_ref_count, md5);
+            LOG_ERROR << "FileInfoLock TryLockFor" << "超时";
+            goto END;
+        }
+    }
+        
+
+    //  user_file_list, 用户文件列表插入一条数据
+    //当前时间戳
+    struct timeval tv;
+    struct tm *ptm;
+    char time_str[128];
+
+    //使用函数gettimeofday()函数来得到时间。它的精度可以达到微妙
+    gettimeofday(&tv, NULL);
+    ptm = localtime(
+        &tv.tv_sec); //把从1970-1-1零点零分到当前时间系统所偏移的秒数时间转换为本地时间
+    // strftime()
+    // 函数根据区域设置格式化本地时间/日期，函数的功能将时间格式化，或者说格式化一个时间字符串
+    strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", ptm);
+
+    // 用户列表增加一个文件记录
+    sprintf(sql_cmd,
+            "insert into user_file_list(user, md5, create_time, file_name, "
+            "shared_status, pv) values ('%s', '%s', '%s', '%s', %d, %d)", user, md5, time_str, filename, 0, 0);
+    LOG_INFO << "执行: " << sql_cmd;
+    if (!db_conn->ExecuteCreate(sql_cmd)) {
+        LOG_ERROR << sql_cmd << " 操作失败";
+        md5_state = Md5Failed;
+        // 恢复引用计数
+        ScopedFileInfoLock lock(FileInfoLock::GetInstance(), 1000);
+        if (lock.IsLocked()) {
+            sprintf(sql_cmd, "update file_info set count = count-1 where md5 = '%s'", md5);
             LOG_INFO << "执行: " << sql_cmd;
             if (!db_conn->ExecutePassQuery(sql_cmd)) {
                 LOG_ERROR << sql_cmd << " 操作失败";
             }
-            goto END;
+        } else {
+             LOG_ERROR << "FileInfoLock TryLockFor" << "超时";
         }
-
-        //查询用户文件数量, 用户数量+1
-        if (CacheIncrCount(cache_conn, FILE_USER_COUNT + string(user)) < 0) {
-            LOG_WARN << "CacheIncrCount failed"; // 这个可以在login的时候从mysql加载
-        }
-
-        md5_state = Md5Ok;
-    } else //没有结果，秒传失败
-    {
-        LOG_INFO << "秒传失败";
-        md5_state = Md5Failed;
         goto END;
     }
 
+    //查询用户文件数量, 用户数量+1
+    if (CacheIncrCount(cache_conn, FILE_USER_COUNT + string(user)) < 0) {
+        LOG_WARN << "CacheIncrCount failed"; // 这个可以在login的时候从mysql加载
+    }
+
+    md5_state = Md5Ok;
+ 
 END:
     /*
     秒传文件：
