@@ -1,0 +1,10 @@
+INCLUDE_DIRECTORIES(${CMAKE_SOURCE_DIR})
+INCLUDE_DIRECTORIES(${CMAKE_SOURCE_DIR}../) 
+
+INCLUDE_DIRECTORIES(${PROJECT_SOURCE_DIR}/client)
+INCLUDE_DIRECTORIES(/usr/include/jsoncpp)
+ 
+
+ADD_EXECUTABLE(fielhub-client fielhub-client.cc)
+
+TARGET_LINK_LIBRARIES(fielhub-client muduo_net jsoncpp)
