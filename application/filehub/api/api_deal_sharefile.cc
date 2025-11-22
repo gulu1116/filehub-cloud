@@ -142,26 +142,28 @@ int handleSaveFile(string &user_name, string &md5, string &filename)
         goto END;
     }
 
-    //文件信息表，查找该文件的计数器
-    sprintf(sql_cmd, "select count from file_info where md5 = '%s'", md5.c_str());
-    count = 0;
-    ret = GetResultOneCount(db_conn, sql_cmd, count); //执行sql语句
-    if (ret != 0) {
-        LOG_ERROR << sql_cmd << " 操作失败";
-        ret = 1;
-        goto END;
-    }
-    // 1、修改file_info中的count字段，+1 （count 文件引用计数）
-    sprintf(sql_cmd, "update file_info set count = %d where md5 = '%s'",
-            count + 1, md5.c_str());
-    if (!db_conn->ExecuteUpdate(sql_cmd)) {
-        LOG_ERROR << sql_cmd << " 操作失败";
-        ret = 1;
-        goto END;
+    //加锁？
+    {
+        ScopedFileInfoLock lock(FileInfoLock::GetInstance(), 1000);
+        if (lock.IsLocked()) {
+             // 1、修改file_info中的count字段，+1 （count 文件引用计数）
+            // 使用数据库提供的原子操作来增加或减少 count 字段。例如，使用 UPDATE file_info SET count = count + 1 WHERE file_id = ? 来增加引用计数。
+            sprintf(sql_cmd, "update file_info set count = count+1 where md5 = '%s'", md5.c_str());
+            if (!db_conn->ExecuteUpdate(sql_cmd)) {
+                LOG_ERROR << sql_cmd << " 操作失败";
+                ret = 1;
+                goto END;
+            }
+        }else {
+            //超时
+            LOG_ERROR << "FileInfoLock TryLockFor" << "超时";
+            ret = 1;
+            goto END;
+        }
     }
 
+    
     // 2、user_file_list插入一条数据
-
     //使用函数gettimeofday()函数来得到时间。它的精度可以达到微妙
     gettimeofday(&tv, NULL);
     ptm = localtime( &tv.tv_sec); //把从1970-1-1零点零分到当前时间系统所偏移的秒数时间转换为本地时间

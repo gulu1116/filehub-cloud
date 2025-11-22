@@ -142,9 +142,11 @@ int handleDeleteFile(string &user, string &md5, string &filename)
     int ret = 0;
     char sql_cmd[SQL_MAX_LEN] = {0};
     char fileid[1024] = {0};
-    int count = 0;
+    
     int shared_status = 0;        //共享状态
     int redis_has_record = 0; //标志redis是否有记录
+     int count = 0;
+    std::string file_id;
     
     CDBManager *db_manager = CDBManager::getInstance();
     CDBConn *db_conn = db_manager->GetDBConn("filehub_master");
@@ -156,7 +158,7 @@ int handleDeleteFile(string &user, string &md5, string &filename)
 
 
 
-    // 查看自己是否分享过这个文件 如果没有分享过
+    // 查看自己是否分享过这个文件 如果你没有分享过
     // sql语句
     //查看该文件是否已经分享了
     sprintf(sql_cmd,
@@ -175,10 +177,10 @@ int handleDeleteFile(string &user, string &md5, string &filename)
 
     //如果分享过 那也从共享文件删除
     if(1 == shared_status) {
-        //从redis
-        //文件标识，文件md5+文件名
+            //从redis
+          //文件标识，文件md5+文件名
         sprintf(fileid, "%s%s", md5.c_str(), filename.c_str());
-        //有序集合删除指定成员
+          //有序集合删除指定成员
         cache_conn->ZsetZrem(FILE_PUBLIC_ZSET, fileid);
         //从hash移除相应记录
         cache_conn->Hdel(FILE_NAME_HASH, fileid);
@@ -196,7 +198,7 @@ int handleDeleteFile(string &user, string &md5, string &filename)
         }
     }
 
-
+    // 锁住
     //mysql删除
     // user_file_list删除
     //删除用户文件列表数据
@@ -211,52 +213,55 @@ int handleDeleteFile(string &user, string &md5, string &filename)
         goto END;
     }
     
-    //文件信息表(file_info)的文件引用计数count，减去1
-    //查看该文件文件引用计数
-    sprintf(sql_cmd, "select count from file_info where md5 = '%s'",
-            md5.c_str());
-    LOG_INFO << "执行: " <<  sql_cmd;
-    count = 0;
-    ret = GetResultOneCount(db_conn, sql_cmd, count); //执行sql语句
-    LOG_INFO << "ret: {}, count: " <<  ret, count;
-    if (ret != 0) {
-        LOG_ERROR << sql_cmd << " 操作失败";
-        ret = -1;
-        goto END;
-    }
-    if (count > 0) {
-          //如果对应这个文件引用计数 -1
-        count -= 1;
-        sprintf(sql_cmd, "update file_info set count=%d where md5 = '%s'", count, md5.c_str());
-        LOG_INFO << "执行: " <<  sql_cmd;
-        if (!db_conn->ExecuteUpdate(sql_cmd)) {
-            LOG_ERROR << sql_cmd << " 操作失败";
-            ret = -1;
+   
+    {
+        FileInfoLock& file_lock = FileInfoLock::GetInstance();
+        ScopedFileInfoLock lock(file_lock, 1000);
+        if (lock.IsLocked()) {
+            sprintf(sql_cmd, "select count, file_id from file_info where md5 = '%s'",  md5.c_str());
+            LOG_INFO << "执行: " <<  sql_cmd;  
+            CResultSet *result_set = db_conn->ExecuteQuery(sql_cmd);
+            if (result_set && result_set->Next()) {
+                count = result_set->GetInt("count");
+                file_id = result_set->GetString("file_id");
+                if (count > 1) {
+                    snprintf(sql_cmd, sizeof(sql_cmd), "update file_info SET count = count - 1 WHERE md5 = '%s'", md5.c_str());
+                    LOG_INFO << "执行: " << sql_cmd;
+                    if (!db_conn->ExecuteUpdate(sql_cmd)) {
+                        LOG_ERROR << sql_cmd << " 操作失败";
+                        ret = -1;
+                        goto END;
+                    }
+                }
+            }else if (count == 1) {
+                // 如果 count == 1，删除记录并从 FastDFS 删除文件
+                snprintf(sql_cmd, sizeof(sql_cmd), "delete from file_info WHERE md5 = '%s'", md5.c_str());
+                LOG_INFO << "执行: " << sql_cmd;
+                if (!db_conn->ExecuteDrop(sql_cmd)) {
+                    LOG_ERROR << sql_cmd << " 操作失败";
+                    ret = -1;
+                    goto END;
+                }
+            }
+        } else {
+            //超时
+            LOG_ERROR << "FileInfoLock TryLockFor" << "超时";
+            ret = 1;
             goto END;
         }
     }
-    if(count == 0) {
-         // file_info 删除
-         sprintf(sql_cmd, "select file_id from file_info where md5 = '%s'",  md5.c_str());
-        string fileid;
-        CResultSet *result_set = db_conn->ExecuteQuery(sql_cmd);
-        if (result_set->Next()) {
-            fileid = result_set->GetString("file_id");
-        }
-        //删除文件信息表中该文件的信息
-        sprintf(sql_cmd, "delete from file_info where md5 = '%s'", md5.c_str());
-        if (!db_conn->ExecuteDrop(sql_cmd)) {
-            LOG_WARN << sql_cmd << " 操作失败";
-        }
-         //从storage服务器删除此文件，参数为为文件id
-        ret = RemoveFileFromFastDfs(fileid.c_str());
+
+    if(count == 1) {  //这个不需要加锁
+         // 从 FastDFS 删除文件
+        ret = RemoveFileFromFastDfs(file_id.c_str());
         if (ret != 0) {
-            LOG_INFO << "RemoveFileFromFastDfs err: " <<  ret;
+            LOG_ERROR << "RemoveFileFromFastDfs err: " << ret;
             ret = -1;
             goto END;
         }
-          // fastdfs也考虑删除
     }
+   
+    
     ret = 0;
     
 END:
