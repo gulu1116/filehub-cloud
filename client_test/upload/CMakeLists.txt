@@ -5,6 +5,6 @@ INCLUDE_DIRECTORIES(${PROJECT_SOURCE_DIR}/client)
 INCLUDE_DIRECTORIES(/usr/include/jsoncpp)
  
 
-ADD_EXECUTABLE(fielhub-client fielhub-client.cc)
+ADD_EXECUTABLE(filehub-client filehub-client.cc)
 
-TARGET_LINK_LIBRARIES(fielhub-client muduo_net jsoncpp)
+TARGET_LINK_LIBRARIES(filehub-client muduo_net jsoncpp)

@@ -44,7 +44,7 @@ endif()
 
 
 option(MUDUO_BUILD_APPLICATION "Build application" ON)
-# option(MUDUO_BUILD_CLIENT "Build client" ON)
+option(MUDUO_BUILD_CLIENT "Build client" ON)
 
 
 if(CMAKE_BUILD_BITS EQUAL 32)
@@ -82,6 +82,6 @@ endif()
 
 
 
-# if(MUDUO_BUILD_CLIENT)
-#   add_subdirectory(client)
-# endif()
+if(MUDUO_BUILD_CLIENT)
+  add_subdirectory(client_test)
+endif()
