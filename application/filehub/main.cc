@@ -62,19 +62,41 @@ private:
         }
     }
 
+    // void onMessage(const TcpConnectionPtr &conn, Buffer *buf, Timestamp time) {
+    //     LOG_INFO <<  "onMessage " << conn.get();
+    //     uint32_t uuid = std::any_cast<uint32_t>(conn->getContext());
+    //     mtx_.lock();  
+    //     CHttpConnPtr &http_conn = s_http_map[uuid];
+    //     mtx_.unlock();
+    //      //处理 相关业务
+    //     if(num_threads_ != 0)  //开启了线程池
+    //         thread_pool_.run(std::bind(&CHttpConn::OnRead, http_conn, buf)); //给到业务线程处理
+    //     else {  //没有开启线程池
+    //         http_conn->OnRead(buf);  // 直接在io线程处理
+    //     }   
+       
+    // }
     void onMessage(const TcpConnectionPtr &conn, Buffer *buf, Timestamp time) {
         LOG_INFO <<  "onMessage " << conn.get();
         uint32_t uuid = std::any_cast<uint32_t>(conn->getContext());
-        mtx_.lock();  
-        CHttpConnPtr &http_conn = s_http_map[uuid];
-        mtx_.unlock();
-         //处理 相关业务
-        if(num_threads_ != 0)  //开启了线程池
-            thread_pool_.run(std::bind(&CHttpConn::OnRead, http_conn, buf)); //给到业务线程处理
-        else {  //没有开启线程池
-            http_conn->OnRead(buf);  // 直接在io线程处理
+        
+        CHttpConnPtr http_conn;  // ✅ 使用值而不是引用
+        {
+            std::lock_guard<std::mutex> ulock(mtx_);
+            auto it = s_http_map.find(uuid);
+            if (it == s_http_map.end()) {
+                LOG_WARN << "connection not found in map, uuid: " << uuid;
+                return;  // ✅ 连接已断开，直接返回
+            }
+            http_conn = it->second;  // ✅ 复制 shared_ptr，增加引用计数
+        }  // ✅ 锁在这里自动释放
+        
+        // 现在 http_conn 是安全的，即使 map 中删除也不会被销毁
+        if(num_threads_ != 0) {
+            thread_pool_.run(std::bind(&CHttpConn::OnRead, http_conn, buf));
+        } else {
+            http_conn->OnRead(buf);
         }   
-       
     }
 
     void onWriteComplete(const TcpConnectionPtr& conn) {

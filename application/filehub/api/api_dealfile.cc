@@ -1,4 +1,5 @@
 #include "api_dealfile.h"
+#include <unistd.h> 
 int decodeDealfileJson(string &str_json, string &user_name, string &token,
                        string &md5, string &filename) {
     bool res;
@@ -47,6 +48,143 @@ int encodeDealfileJson(int ret, string &str_json) {
 }
 
 // 分享文件
+// Updated handleShareFile using available CacheConn APIs (Set, SetEx, Del)
+// Thread‑safe, no deadlocks, no duplicate insertions, compatible with original code
+
+int handleShareFile(string &user, string &md5, string &filename)
+{
+    int share_state = 0;
+    int ret = 0;
+
+    char sql_cmd[SQL_MAX_LEN] = {0};
+    char fileid[1024] = {0};
+    char lock_key[256] = {0};
+
+    time_t now;
+    char create_time[TIME_STRING_LEN] = {0};
+
+    // DB
+    CDBManager *db_manager = CDBManager::getInstance();
+    CDBConn *db_conn = db_manager->GetDBConn("filehub_master");
+    AUTO_REL_DBCONN(db_manager, db_conn);
+
+    // Redis
+    CacheManager *cache_manager = CacheManager::getInstance();
+    CacheConn *cache_conn = cache_manager->GetCacheConn("ranking_list");
+    AUTO_REL_CACHECONN(cache_manager, cache_conn);
+
+    sprintf(fileid, "%s%s", md5.c_str(), filename.c_str());
+    sprintf(lock_key, "share_lock:%s", fileid);
+
+    // ------------------------
+    // 1. Acquire distributed lock
+    // ------------------------
+    // CacheConn::Set returns non‑empty string if success (NX behavior in original code)
+    const string lock_val = std::to_string(time(NULL));
+    bool lock_ok = false;
+
+    for (int i = 0; i < 10; i++) {
+        string r = cache_conn->Set(lock_key, lock_val);
+        if (!r.empty()) {
+            cache_conn->SetEx(lock_key, 10, lock_val); // 10s safety expiration
+            lock_ok = true;
+            break;
+        }
+        usleep(100000); // 100ms
+    }
+
+    if (!lock_ok) {
+        LOG_ERROR << "Failed to acquire lock for " << fileid;
+        return 1;
+    }
+
+    auto release_lock = [&]() {
+        cache_conn->Del(lock_key);
+    };
+
+    // ------------------------
+    // 2. Fast-path: check Redis ZSET
+    // ------------------------
+    ret = cache_conn->ZsetExist(FILE_PUBLIC_ZSET, fileid);
+    if (ret == 1) {
+        LOG_WARN << "Already shared in Redis: " << fileid;
+        share_state = 3;
+        release_lock();
+        return share_state;
+    }
+
+    // ------------------------
+    // 3. Check MySQL: is this file already shared by anyone?
+    // ------------------------
+    sprintf(sql_cmd,
+            "select * from share_file_list where md5='%s' and file_name='%s'",
+            md5.c_str(), filename.c_str());
+
+    ret = CheckwhetherHaveRecord(db_conn, sql_cmd);
+    if (ret == 1) {
+        // sync redis
+        cache_conn->ZsetAdd(FILE_PUBLIC_ZSET, 0, fileid);
+        cache_conn->Hset(FILE_NAME_HASH, fileid, filename);
+        LOG_WARN << "Already shared (MySQL): " << fileid;
+        share_state = 3;
+        release_lock();
+        return share_state;
+    }
+
+    // ------------------------
+    // 4. Update user_file_list (owner's share flag)
+    // ------------------------
+    sprintf(sql_cmd,
+            "update user_file_list set shared_status=1 where user='%s' and md5='%s' and file_name='%s'",
+            user.c_str(), md5.c_str(), filename.c_str());
+
+    if (!db_conn->ExecuteUpdate(sql_cmd, false)) {
+        LOG_ERROR << sql_cmd << " failed";
+        share_state = 1;
+        release_lock();
+        return share_state;
+    }
+
+    // ------------------------
+    // 5. Insert share_file_list with ON DUPLICATE KEY UPDATE
+    // ------------------------
+    now = time(NULL);
+    strftime(create_time, TIME_STRING_LEN, "%Y-%m-%d %H:%M:%S", localtime(&now));
+
+    sprintf(sql_cmd,
+            "insert into share_file_list (user, md5, create_time, file_name, pv) "
+            "values ('%s', '%s', '%s', '%s', 0) "
+            "on duplicate key update pv = pv",
+            user.c_str(), md5.c_str(), create_time, filename.c_str());
+
+    if (!db_conn->ExecuteCreate(sql_cmd)) {
+        LOG_ERROR << "insert failed but checking for existing record...";
+
+        // Recheck to avoid false failure
+        sprintf(sql_cmd,
+                "select * from share_file_list where md5='%s' and file_name='%s'",
+                md5.c_str(), filename.c_str());
+
+        ret = CheckwhetherHaveRecord(db_conn, sql_cmd);
+        if (ret != 1) {
+            share_state = 1;
+            release_lock();
+            return share_state;
+        }
+    }
+
+    // ------------------------
+    // 6. Update Redis
+    // ------------------------
+    cache_conn->ZsetAdd(FILE_PUBLIC_ZSET, 0, fileid);
+    cache_conn->Hset(FILE_NAME_HASH, fileid, filename);
+
+    release_lock();
+    return 0;
+}
+
+
+/*
 int handleShareFile(string &user, string &md5, string &filename)
 {
     int share_state = 0;
@@ -135,6 +273,7 @@ END:
     return share_state;
 
 }
+    */
 
 //删除文件 这里是删除文件，不是取消分享
 int handleDeleteFile(string &user, string &md5, string &filename) 
@@ -232,22 +371,22 @@ int handleDeleteFile(string &user, string &md5, string &filename)
                         ret = -1;
                         goto END;
                     }
+                } else if (count == 1) {
+                    // 如果 count == 1，删除记录并从 FastDFS 删除文件
+                    snprintf(sql_cmd, sizeof(sql_cmd), "delete from file_info WHERE md5 = '%s'", md5.c_str());
+                    LOG_INFO << "执行: " << sql_cmd;
+                    if (!db_conn->ExecuteDrop(sql_cmd)) {
+                        LOG_ERROR << sql_cmd << " 操作失败";
+                        ret = -1;
+                        goto END;
+                    }
                 }
-            }else if (count == 1) {
-                // 如果 count == 1，删除记录并从 FastDFS 删除文件
-                snprintf(sql_cmd, sizeof(sql_cmd), "delete from file_info WHERE md5 = '%s'", md5.c_str());
-                LOG_INFO << "执行: " << sql_cmd;
-                if (!db_conn->ExecuteDrop(sql_cmd)) {
-                    LOG_ERROR << sql_cmd << " 操作失败";
-                    ret = -1;
-                    goto END;
-                }
+            } else {
+            // result_set 为空或没有数据
+                LOG_ERROR << "FileInfoLock TryLockFor" << "超时";
+                ret = 1;
+                goto END;
             }
-        } else {
-            //超时
-            LOG_ERROR << "FileInfoLock TryLockFor" << "超时";
-            ret = 1;
-            goto END;
         }
     }
 
@@ -345,6 +484,11 @@ int ApiDealfile(string &url, string &post_data, string &str_json) {
             return -1;
         }
         //token校验  
+        if (VerifyToken(user_name, token) != 0) {
+            LOG_ERROR << "token verification failed for user: " << user_name;
+            encodeDealfileJson(HTTP_RESP_TOKEN_ERR, str_json);
+            return -1;
+        }
         //处理分享逻辑   序列化
         ret = handleShareFile(user_name , md5, filename);
         encodeDealfileJson(ret, str_json);
@@ -355,7 +499,12 @@ int ApiDealfile(string &url, string &post_data, string &str_json) {
             encodeDealfileJson(1, str_json);
             return -1;
         }
-         //token校验 
+         //token校验
+        if (VerifyToken(user_name, token) != 0) {
+            LOG_ERROR << "token verification failed for user: " << user_name;
+            encodeDealfileJson(HTTP_RESP_TOKEN_ERR, str_json);
+            return -1;
+        }
          ret = handleDeleteFile(user_name, md5, filename);
          encodeDealfileJson(ret, str_json);
     } else if (strcmp(cmd, "pv") == 0) //文件下载标志处理
@@ -363,6 +512,11 @@ int ApiDealfile(string &url, string &post_data, string &str_json) {
         // 反序列化
         if(decodeDealfileJson(post_data, user_name, token, md5, filename) < 0) {
             encodeDealfileJson(1, str_json);
+            return -1;
+        }
+        if (VerifyToken(user_name, token) != 0) {
+            LOG_ERROR << "token verification failed for user: " << user_name;
+            encodeDealfileJson(HTTP_RESP_TOKEN_ERR, str_json);
             return -1;
         }
         ret = handlePvFile(user_name, md5, filename);

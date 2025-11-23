@@ -95,10 +95,15 @@ void CHttpConn::OnRead(Buffer *buf) // CHttpConn业务层面的OnRead
                 "Content-Type:application/json;charset=utf-8\r\n\r\n%s"
             snprintf(resp_content, 256, HTTP_RESPONSE_REQ, len_json, str_json.c_str()); 	
             tcp_conn_->send(resp_content);
+            delete[] resp_content;  // 释放内存
         }
-       
+
+    } else {
+        //  请求不完整，等待更多数据
+        LOG_DEBUG << "HTTP request not complete, waiting for more data";
+        // 不消费 buf，等待下次 onMessage
     }
-     #endif
+    #endif
 }
 
 

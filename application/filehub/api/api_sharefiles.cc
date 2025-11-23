@@ -248,6 +248,10 @@ void handleGetRankingFilelist(int start, int count, string &str_json) {
     ret = 0;
     // json
 END:
+    if (value != NULL) {
+        free(value);
+        value = NULL;
+    }
     if(ret == 0) {
         root["code"] = 0;
         root["total"] = sql_num;

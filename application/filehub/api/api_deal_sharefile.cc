@@ -250,28 +250,52 @@ int handlePvFile(string &md5, string &filename) {
 
     // zset 的member
     //===2、判断元素是否在集合中(redis操作)
-    ret = cache_conn->ZsetExist(FILE_PUBLIC_ZSET, fileid);
-    if (ret == 0) //不存在
-    {                     //===4、如果不存在，从mysql导入数据
-        //===5、redis集合中增加一个元素(redis操作)
-        cache_conn->ZsetAdd(FILE_PUBLIC_ZSET, pv + 1, fileid);
+    // ret = cache_conn->ZsetExist(FILE_PUBLIC_ZSET, fileid);
+    // if (ret == 0) //不存在
+    // {                     //===4、如果不存在，从mysql导入数据
+    //     //===5、redis集合中增加一个元素(redis操作)
+    //     cache_conn->ZsetAdd(FILE_PUBLIC_ZSET, pv + 1, fileid);
 
-        //===6、redis对应的hash也需要变化 (redis操作)
-        //     fileid ------>  filename
-        cache_conn->Hset(FILE_NAME_HASH, fileid, filename);
-        ret = 0;
-    } else if(ret == 1){
-        ret = cache_conn->ZsetIncr(FILE_PUBLIC_ZSET,  fileid); 
-        if (ret != 0) {
-            ret = 1;
-            LOG_ERROR << "ZsetIncr 操作失败";
-        }
-    }
-    else //出错
-    {
+    //     //===6、redis对应的hash也需要变化 (redis操作)
+    //     //     fileid ------>  filename
+    //     cache_conn->Hset(FILE_NAME_HASH, fileid, filename);
+    //     ret = 0;
+    // } else if(ret == 1){
+    //     ret = cache_conn->ZsetIncr(FILE_PUBLIC_ZSET,  fileid); 
+    //     if (ret != 0) {
+    //         ret = 1;
+    //         LOG_ERROR << "ZsetIncr 操作失败";
+    //     }
+    // }
+    // else //出错
+    // {
+    //     ret = 1;
+    //     goto END;
+    // }
+    ret = cache_conn->ZsetExist(FILE_PUBLIC_ZSET, fileid);
+    if (ret < 0) {
+        LOG_ERROR << "ZsetExist failed";
         ret = 1;
         goto END;
+    } else if (ret == 0) {
+        // 不存在，添加
+        if (cache_conn->ZsetAdd(FILE_PUBLIC_ZSET, pv + 1, fileid) != 0) {
+            LOG_ERROR << "ZsetAdd failed";
+            ret = 1;
+            goto END;
+        }
+        if (cache_conn->Hset(FILE_NAME_HASH, fileid, filename) < 0) {
+            LOG_WARN << "Hset failed";
+        }
+    } else if (ret > 0) {
+        // 存在，增加分数
+        if (cache_conn->ZsetIncr(FILE_PUBLIC_ZSET, fileid) != 0) {
+            LOG_ERROR << "ZsetIncr failed";
+            ret = 1;
+            goto END;
+        }
     }
+    ret = 0;
 END:
     return ret;
 

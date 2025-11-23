@@ -11,6 +11,80 @@
 //   fileid：输出参数，用于存储上传成功后的FastDFS文件ID（需提前分配足够内存，至少TEMP_BUF_MAX_LEN字节）
 //   fileid 返回
 int uploadFileToFastDfs(char *file_path, char *fileid) {
+    int ret = 0;
+    pid_t pid;
+    int fd[2];
+    int status;
+    
+    if (pipe(fd) < 0) {
+        LOG_ERROR << "pipe error";
+        return -1;
+    }
+    
+    pid = fork();
+    if (pid < 0) {
+        LOG_ERROR << "fork error";
+        close(fd[0]);
+        close(fd[1]);
+        return -1;
+    }
+    
+    if (pid == 0) {
+        // 子进程
+        close(fd[0]);
+        dup2(fd[1], STDOUT_FILENO);
+        close(fd[1]);
+        execlp("fdfs_upload_file", "fdfs_upload_file",
+               s_dfs_path_client.c_str(), file_path, NULL);
+        // 如果到这里说明 execlp 失败
+        _exit(1);  // 使用 _exit 避免刷新缓冲区
+    } else {
+        // 父进程
+        close(fd[1]);
+        
+        // 设置超时（使用 select 或 epoll）
+        fd_set readfds;
+        struct timeval timeout;
+        FD_ZERO(&readfds);
+        FD_SET(fd[0], &readfds);
+        timeout.tv_sec = 30;  // 30秒超时
+        timeout.tv_usec = 0;
+        
+        if (select(fd[0] + 1, &readfds, NULL, NULL, &timeout) <= 0) {
+            LOG_ERROR << "read timeout or error";
+            close(fd[0]);
+            waitpid(pid, NULL, 0);  // 等待子进程
+            return -1;
+        }
+        
+        ssize_t n = read(fd[0], fileid, TEMP_BUF_MAX_LEN - 1);
+        close(fd[0]);
+        
+        if (n <= 0) {
+            LOG_ERROR << "read failed or empty";
+            waitpid(pid, &status, 0);
+            return -1;
+        }
+        
+        fileid[n] = '\0';
+        TrimSpace(fileid);
+        
+        waitpid(pid, &status, 0);
+        if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {
+            LOG_ERROR << "fdfs_upload_file failed with exit code " << WEXITSTATUS(status);
+            return -1;
+        }
+        
+        if (strlen(fileid) == 0) {
+            LOG_ERROR << "upload failed: empty fileid";
+            return -1;
+        }
+    }
+    
+    return 0;
+}
+/*
+int uploadFileToFastDfs(char *file_path, char *fileid) {
 
     int ret = 0;
     // s_dfs_path_client：全局变量，存储FastDFS客户端配置文件路径（如 "/etc/fdfs/client.conf"）
@@ -85,6 +159,7 @@ int uploadFileToFastDfs(char *file_path, char *fileid) {
 END:
     return ret;
 }
+*/
 
 /*
 *    根据FastDFS的fileid获取文件的完整url地址，返回结果（0成功，-1失败）
@@ -173,10 +248,24 @@ int getFullUrlByFileid(char *fileid, char *fdfs_file_url) {
         // strstr(const char *haystack, const char *needle)：在haystack中查找needle的首次出现
         // 这里查找标记字符串"source ip address: "，p指向该字符串的起始位置
         // 拼接上传文件的完整url地址--->http://host_name/group1/M00/00/00/D12313123232312.png
-        p = strstr(fdfs_file_stat_buf, "source ip address: ");
+        // p = strstr(fdfs_file_stat_buf, "source ip address: ");
 
+        // q = p + strlen("source ip address: ");
+        // k = strstr(q, "\n");  // k指向IP的结束位置：查找q之后的第一个换行符\n
+
+        p = strstr(fdfs_file_stat_buf, "source ip address: ");
+        if (p == NULL) {
+            LOG_ERROR << "cannot find 'source ip address:' in fdfs_file_info output";
+            ret = -1;
+            goto END;
+        }
         q = p + strlen("source ip address: ");
-        k = strstr(q, "\n");  // k指向IP的结束位置：查找q之后的第一个换行符\n
+        k = strstr(q, "\n");
+        if (k == NULL) {
+            LOG_ERROR << "cannot find newline after ip address";
+            ret = -1;
+            goto END;
+        }
 
         strncpy(fdfs_file_host_name, q, k - q);
         fdfs_file_host_name[k - q] = '\0'; // 这里这个获取回来只是局域网的ip地址
@@ -320,7 +409,7 @@ int ApiUpload(string &post_data, string &str_json){
     CDBManager *db_manager = CDBManager::getInstance();
     CDBConn *db_conn = db_manager->GetDBConn("filehub_master"); // 连接池可以配置多个 分库
     AUTO_REL_DBCONN(db_manager, db_conn);
-    goto END;//不做任何解析，直接返回
+    // goto END;//不做任何解析，直接返回
     //分隔符
     // 1. 解析boundary
     // Content-Type: multipart/form-data;
