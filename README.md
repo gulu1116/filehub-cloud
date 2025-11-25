@@ -23,7 +23,7 @@ filehub-cloud/
 ├── muduo/               # muduo 网络库（第三方依赖）
 ├── sql/                 # 数据库建表脚本
 ├── front/               # 前端代码（待补充）
-├── client_test/         # 客户端测试代码
+├── client/         # 客户端测试代码
 ├── wrk_test/            # 压力测试脚本
 └── build/               # 构建目录
 ```

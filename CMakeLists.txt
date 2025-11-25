@@ -83,5 +83,5 @@ endif()
 
 
 if(MUDUO_BUILD_CLIENT)
-  add_subdirectory(client_test)
+  add_subdirectory(client)
 endif()
